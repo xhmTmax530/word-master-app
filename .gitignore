@@ -24,3 +24,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Claude agent worktrees (per-session, never committed)
+.claude/worktrees/

@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wordmaster.app.WordMasterApp
 import com.wordmaster.app.data.model.ReviewOutcome
-import com.wordmaster.app.data.model.StudyCard
 import com.wordmaster.app.data.repository.WordRepository
 import com.wordmaster.app.logic.WordSelector
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,18 +15,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * UI State for the study screen.
- */
-data class StudyUiState(
-    val currentCard: StudyCard? = null,
-    val isFlipped: Boolean = false,
-    val learnedToday: Int = 0,
-    val targetToday: Int = 20,
-    val isLoading: Boolean = true,
-)
-
-/**
  * ViewModel for the study/review screen.
+ *
+ * 由 Logic Agent 实现,通过 Room + EbbinghausScheduler 驱动单词复习队列。
+ * 状态契约见同包下的 StudyUiState。
  */
 class StudyViewModel(
     application: Application,

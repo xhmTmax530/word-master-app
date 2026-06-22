@@ -4,18 +4,16 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.wordmaster.app.ui.screen.StudyScreen
 import com.wordmaster.app.ui.theme.WordMasterTheme
+import com.wordmaster.app.viewmodel.StudyViewModel
 
 /**
- * Lead 阶段 MainActivity:仅占位,展示主题已就绪。
- * Phase 2 整合时由 UI 队员接入 StudyScreen + ViewModel。
+ * MainActivity: 接入 StudyScreen + 真实的 StudyViewModel(Room + Ebbinghaus 驱动)。
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -24,16 +22,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             WordMasterTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    scaffoldPlaceholder()
+                    val vm: StudyViewModel = viewModel()
+                    StudyScreen(viewModel = vm)
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun scaffoldPlaceholder() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(text = "WordMaster 骨架已就绪,等待 UI 队员接入")
     }
 }
