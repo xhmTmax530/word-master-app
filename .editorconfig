@@ -17,3 +17,7 @@ ij_kotlin_imports_layout = *,^
 ij_kotlin_allow_trailing_comma = true
 ij_kotlin_allow_trailing_comma_on_call_site = true
 ktlint_code_style = ktlint_official
+
+# Compose UI:关闭 function-naming,@Composable 强制 PascalCase 是 Compose 官方约定
+[app/src/main/java/com/wordmaster/app/ui/**.kt]
+ktlint_standard_function-naming = disabled
