@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             WordMasterTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ScaffoldPlaceholder()
+                    scaffoldPlaceholder()
                 }
             }
         }
@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun ScaffoldPlaceholder() {
+private fun scaffoldPlaceholder() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(text = "WordMaster 骨架已就绪,等待 UI 队员接入")
     }
