@@ -22,7 +22,7 @@ object WordSelector {
         if (cards.isEmpty()) return null
 
         // Separate due cards from non-due
-        val dueCards = cards.filter { it.isDue }
+        val dueCards = cards.filter { it.isDue(now) }
         if (dueCards.isNotEmpty()) {
             return dueCards.random()
         }

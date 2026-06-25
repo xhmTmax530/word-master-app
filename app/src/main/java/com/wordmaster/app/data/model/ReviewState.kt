@@ -15,6 +15,11 @@ data class StudyCard(
     val word: Word,
     val progress: WordProgress,
 ) {
-    val isDue: Boolean
-        get() = progress.nextReviewAt <= System.currentTimeMillis() && progress.stage > 0
+    /**
+     * 是否到期:`nextReviewAt <= now` 且已学过(stage>0)。
+     *
+     * now 作为参数传入,不在此处调 `System.currentTimeMillis()`,
+     * 保证单测稳定且 GitHub Actions runner 上不依赖 wall clock。
+     */
+    fun isDue(now: Long): Boolean = progress.nextReviewAt <= now && progress.stage > 0
 }
