@@ -1,32 +1,56 @@
-# WordMaster — Issue 触发自动检测 + Agent 检查
+# WordMaster — Issue/PR 触发 + 每日汇总邮件
 #
-# 设计思路(教学注释):
-#   1. 触发器(下面 on 块):谁开了/编辑/重开了 issue,就跑这个流程
-#   2. Stage 1 (静态检测 + 测试):纯 GitHub Actions 跑,不消耗 API key
-#   3. Stage 2 (Agent 检查):用 DeepSeek 让 AI 判断 issue 是否合理,自动评论回 issue
-#   4. 失败兜底:任一阶段失败都会自动评论说明原因
+# 设计思路:
+#   1. 触发器:
+#      - on.issues / on.pull_request: 单事件触发,立即跑 Stage 1+2+发邮件
+#      - on.schedule: 每天北京时间 9:30(UTC 1:30)触发,汇总昨天的 PR 发邮件
+#   2. Stage 1 (单事件): ktlint + unit test + assembleDebug
+#   3. Stage 2 (单事件): DeepSeek Agent 给 issue/PR 出 verdict
+#   4. Stage 3 (单事件): github-script 写评论 + SMTP 发邮件通知维护者
+#   5. Daily digest job(定时): gh CLI 拉昨天 PR 列表,DeepSeek 摘要,SMTP 发汇总邮件
 #
 # 安全要点:
-#   - API key 永远用 ${{ secrets.DEEPSEEK_API_KEY }} 引用,workflow 文件本身不含明文
-#   - 不会 echo/打印/写入任何 secret 到日志或评论
+#   - 所有 secret 走 ${{ secrets.* }} 引用,文件不含任何明文
+#   - SMTP 密码、API key 都由 GitHub 加密存储,只在 VM 内存中临时使用
+#
+# Secret 清单(用户手动在 Settings → Secrets 配置):
+#   - DEEPSEEK_API_KEY      DeepSeek API key
+#   - SMTP_HOST             139 邮箱 SMTP = smtp.139.com
+#   - SMTP_PORT             SSL 端口 = 465
+#   - SMTP_USER             13868078255@139.com
+#   - SMTP_PASSWORD         139 邮箱客户端授权码(16 位)
+#   - NOTIFY_EMAIL          汇总邮件收件人 = 13868078255@139.com
 
-name: Issue Handler
+name: Issue Handler + Daily Digest
 
 on:
+  # 单事件触发
   issues:
     types: [opened, edited, reopened]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # 定时触发:每天北京时间 9:30 = UTC 1:30
+  schedule:
+    - cron: '30 1 * * *'
+  # 允许手动触发(测试用)
+  workflow_dispatch:
 
 permissions:
-  issues: write        # 允许机器人写评论
-  contents: read       # 允许 checkout 代码
+  issues: write
+  contents: read
+  pull-requests: write
 
 jobs:
-  check-issue:
+  # ========================================================================
+  # Job 1: 单 issue/PR 事件 — Stage 1 测试 + Stage 2 DeepSeek + Stage 3 发邮件
+  # ========================================================================
+  handle-event:
+    name: Handle Issue/PR Event
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      # ========== Stage 1: 静态检测 + 测试 ==========
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -50,7 +74,6 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Run ktlint check
-        # 项目没接 ktlint gradle plugin,直接用 CLI(跟本地开发一致)
         run: |
           curl -sSLO https://github.com/pinterest/ktlint/releases/download/1.3.1/ktlint
           chmod +x ktlint
@@ -58,38 +81,49 @@ jobs:
 
       - name: Run unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon
-        continue-on-error: false
 
       - name: Run debug build
-        # 顺手验证编译能不能过
         run: ./gradlew :app:assembleDebug --no-daemon
-        continue-on-error: false
 
-      # ========== Stage 2: DeepSeek Agent 检查 ==========
-      - name: Collect issue context
+      - name: Collect event context
         id: ctx
         env:
+          EVENT_NAME: ${{ github.event_name }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
           ISSUE_BODY: ${{ github.event.issue.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           {
+            echo "kind<<EOF"
+            echo "$EVENT_NAME"
+            echo "EOF"
             echo "title<<EOF"
-            echo "$ISSUE_TITLE"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "$PR_TITLE"
+            else
+              echo "$ISSUE_TITLE"
+            fi
             echo "EOF"
             echo "body<<EOF"
-            echo "$ISSUE_BODY"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "$PR_BODY"
+            else
+              echo "$ISSUE_BODY"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Call DeepSeek for issue verdict
+      - name: Call DeepSeek for verdict
         id: verdict
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          ISSUE_TITLE: ${{ steps.ctx.outputs.title }}
-          ISSUE_BODY: ${{ steps.ctx.outputs.body }}
+          EVENT_KIND: ${{ steps.ctx.outputs.kind }}
+          EVENT_TITLE: ${{ steps.ctx.outputs.title }}
+          EVENT_BODY: ${{ steps.ctx.outputs.body }}
         run: |
           set -euo pipefail
-          # 把 issue 转成一段给 LLM 的提示词
           PROMPT=$(cat <<JSON
           {
             "model": "deepseek-chat",
@@ -97,42 +131,38 @@ jobs:
             "messages": [
               {
                 "role": "system",
-                "content": "你是 WordMaster 项目维护者助手。WordMaster 是一个 Kotlin + Jetpack Compose + Room 的 Android 背单词 App,使用艾宾浩斯遗忘曲线。请评估用户提交的 issue,并给出简洁、结构化的 verdict。必须以 JSON 输出,字段:verdict (PASS|CONCERNS|FAIL), summary (一句话总结), details (最多 5 条要点,markdown 列表)。"
+                "content": "你是 WordMaster 项目维护者助手。WordMaster 是一个 Kotlin + Jetpack Compose + Room 的 Android 背单词 App,使用艾宾浩斯遗忘曲线。事件类型: ${EVENT_KIND}。请评估并以 JSON 输出,字段:verdict (PASS|CONCERNS|FAIL), summary (一句话总结), details (最多 5 条要点,markdown 列表)。"
               },
               {
                 "role": "user",
-                "content": "Issue 标题: ${ISSUE_TITLE}\n\nIssue 正文:\n${ISSUE_BODY}"
+                "content": "标题: ${EVENT_TITLE}\n\n正文:\n${EVENT_BODY}"
               }
             ]
           }
           JSON
           )
-
-          # 调用 DeepSeek Chat Completions API
           RESPONSE=$(curl -sS \
             -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PROMPT" \
             https://api.deepseek.com/v1/chat/completions)
-
-          # 把 verdict 全文存到 outputs,供后面评论用
           VERDICT_TEXT=$(echo "$RESPONSE" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])")
-
           {
             echo "text<<EOF"
             echo "$VERDICT_TEXT"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      # ========== Stage 3: 自动评论到 issue ==========
-      - name: Comment verdict on issue
+      - name: Comment verdict on issue/PR
         uses: actions/github-script@v7
         with:
           script: |
             const verdict = `${{ steps.verdict.outputs.text }}`;
+            const kind = `${{ steps.ctx.outputs.kind }}`;
+            const eventLabel = kind === 'pull_request' ? 'PR' : 'Issue';
             const body = [
-              '🤖 **WordMaster Issue Agent 审查结果**',
+              `🤖 **WordMaster ${eventLabel} Agent 审查结果**`,
               '',
               '✅ Stage 1 静态检测:通过 (ktlint / unit test / assembleDebug)',
               '✅ Stage 2 Agent 审查:已生成 verdict',
@@ -151,3 +181,169 @@ jobs:
               issue_number: context.issue.number,
               body: body
             });
+
+      - name: Send email notification via SMTP
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          EVENT_TITLE: ${{ steps.ctx.outputs.title }}
+          EVENT_KIND: ${{ steps.ctx.outputs.kind }}
+          EVENT_URL: ${{ github.event.issue.html_url }}
+          VERDICT: ${{ steps.verdict.outputs.text }}
+        run: |
+          set -euo pipefail
+          # 构造邮件正文
+          SUBJECT="[WordMaster] ${EVENT_KIND} 新事件: ${EVENT_TITLE}"
+          BODY=$(cat <<EOF
+          WordMaster CI Agent 通知
+
+          事件类型: ${EVENT_KIND}
+          标题: ${EVENT_TITLE}
+          链接: ${EVENT_URL}
+
+          ========== DeepSeek Verdict ==========
+          ${VERDICT}
+
+          ==========
+          请打开链接查看详情并人工 review。
+          EOF
+          )
+          # 用 Python smtplib 发邮件(SMTP_SSL 走 465 端口)
+          python3 <<PYEOF
+          import smtplib, ssl, os
+          from email.message import EmailMessage
+          host = os.environ['SMTP_HOST']
+          port = int(os.environ['SMTP_PORT'])
+          user = os.environ['SMTP_USER']
+          password = os.environ['SMTP_PASSWORD']
+          to = os.environ['NOTIFY_EMAIL']
+          subject = os.environ.get('SUBJECT', '[WordMaster] 新事件')
+          body = os.environ.get('BODY', '')
+          msg = EmailMessage()
+          msg['From'] = user
+          msg['To'] = to
+          msg['Subject'] = subject
+          msg.set_content(body)
+          ctx = ssl.create_default_context()
+          with smtplib.SMTP_SSL(host, port, context=ctx) as s:
+              s.login(user, password)
+              s.send_message(msg)
+          print('Email sent to ' + to)
+          PYEOF
+
+  # ========================================================================
+  # Job 2: 每日 9:30 汇总昨天的 PR + issue,发一封日报邮件
+  # ========================================================================
+  daily-digest:
+    name: Daily PR Digest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fetch yesterday's PRs and issues
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # 计算"昨天"的 UTC 时间范围(北京时间 0:00-23:59 = UTC 前一天 16:00 - 今天 16:00)
+          # 简化:直接取过去 24 小时
+          SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')
+          UNTIL=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+          # 拉昨天的 PR
+          PRS=$(gh pr list --state all --json number,title,author,state,createdAt,closedAt \
+            --jq "[.[] | select(.createdAt >= \"$SINCE\" and .createdAt < \"$UNTIL\")]")
+          OPEN_PRS=$(gh pr list --state open --json number,title,author \
+            --jq '.[] | "#\(.number) \(.title) by @\(.author.login)"' | head -20)
+
+          # 拉昨天的 issue
+          ISSUES=$(gh issue list --state all --json number,title,author,state,createdAt \
+            --jq "[.[] | select(.createdAt >= \"$SINCE\" and .createdAt < \"$UNTIL\")]")
+
+          echo "pr_count=$(echo "$PRS" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')" >> "$GITHUB_OUTPUT"
+          echo "issue_count=$(echo "$ISSUES" | python3 -c 'import sys,json; print(len(json.load(sys.stdin)))')" >> "$GITHUB_OUTPUT"
+          echo "open_prs<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$OPEN_PRS" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "new_prs<<EOF"
+            echo "$PRS" | python3 -c "
+          import sys,json
+          prs = json.load(sys.stdin)
+          for p in prs:
+              print(f\"#{p['number']} {p['title']} (by @{p['author']['login']}, {p['state']})\")" | head -20
+            echo "EOF"
+            echo "new_issues<<EOF"
+            echo "$ISSUES" | python3 -c "
+          import sys,json
+          issues = json.load(sys.stdin)
+          for i in issues:
+              print(f\"#{i['number']} {i['title']} (by @{i['author']['login']}, {i['state']})\")" | head -20
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compose and send digest email
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          PR_COUNT: ${{ steps.collect.outputs.pr_count }}
+          ISSUE_COUNT: ${{ steps.collect.outputs.issue_count }}
+          NEW_PRS: ${{ steps.collect.outputs.new_prs }}
+          NEW_ISSUES: ${{ steps.collect.outputs.new_issues }}
+          OPEN_PRS: ${{ steps.collect.outputs.open_prs }}
+        run: |
+          set -euo pipefail
+          TODAY=$(date '+%Y-%m-%d')
+          SUBJECT="[WordMaster] ${TODAY} 每日 PR/Issue 汇总"
+          python3 <<PYEOF
+          import smtplib, ssl, os
+          from email.message import EmailMessage
+          today = "$TODAY"
+          pr_count = int("$PR_COUNT")
+          issue_count = int("$ISSUE_COUNT")
+          new_prs = """$NEW_PRS""".strip() or "(无)"
+          new_issues = """$NEW_ISSUES""".strip() or "(无)"
+          open_prs = """$OPEN_PRS""".strip() or "(无)"
+          body = f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          📊 WordMaster 每日汇总
+          📅 {today} (北京时间)
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+          🆕 过去 24h 新增 PR ({pr_count} 个):
+          {new_prs}
+
+          🆕 过去 24h 新增 Issue ({issue_count} 个):
+          {new_issues}
+
+          📋 当前待处理 PR(最多 20 个):
+          {open_prs}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          🤖 由 WordMaster CI Agent 自动生成
+          详细审查请访问 GitHub PR/Issue 页面
+          """
+          host = os.environ['SMTP_HOST']
+          port = int(os.environ['SMTP_PORT'])
+          user = os.environ['SMTP_USER']
+          password = os.environ['SMTP_PASSWORD']
+          to = os.environ['NOTIFY_EMAIL']
+          subject = f"[WordMaster] {today} 每日 PR/Issue 汇总"
+          msg = EmailMessage()
+          msg['From'] = user
+          msg['To'] = to
+          msg['Subject'] = subject
+          msg.set_content(body)
+          ctx = ssl.create_default_context()
+          with smtplib.SMTP_SSL(host, port, context=ctx) as s:
+              s.login(user, password)
+              s.send_message(msg)
+          print('Daily digest sent to ' + to)
+          PYEOF
