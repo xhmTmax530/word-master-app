@@ -152,10 +152,9 @@ jobs:
           BODY=$(echo "$RESPONSE" | sed 's/HTTP_STATUS=.*//')
           echo "DeepSeek HTTP status: $HTTP_STATUS"
           echo "DeepSeek response body (first 500 chars): ${BODY:0:500}"
-          VERDICT_TEXT=$(echo "$BODY" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])" 2>&1) || {
-            echo "❌ DeepSeek verdict failed"
-            VERDICT_TEXT="{\"verdict\":\"FAIL\",\"summary\":\"DeepSeek API 不可用(HTTP $HTTP_STATUS),Agent 跳过审查\",\"details\":[\"- DeepSeek 返回空响应或非 JSON\",\"- 请稍后重试或在 Settings 检查 DEEPSEEK_API_KEY Secret\"]}"
+          VERDICT_TEXT=$(echo "$BODY" | python3 .github/scripts/parse_verdict.py) || {
+            echo "❌ DeepSeek verdict 解析失败,使用兜底文本"
+            VERDICT_TEXT='{"verdict":"FAIL","summary":"DeepSeek verdict 解析失败,Agent 跳过审查","details":["- DeepSeek 返回非 JSON 格式或意外响应","- 请查看 Action 日志获取原始响应"]}'
           }
           {
             echo "text<<EOF"
