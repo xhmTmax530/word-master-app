@@ -12,7 +12,9 @@ import androidx.room.RoomDatabase
 @Database(
     entities = [WordProgressEntity::class],
     version = 1,
-    exportSchema = false,
+    // D-1 fix: 开启 schema 导出,配合 build.gradle.kts 的 ksp arg 输出到 app/schemas/
+    // 避免下次升级 Room 版本时丢失迁移信息或数据库结构
+    exportSchema = true,
 )
 abstract class WordDatabase : RoomDatabase() {
     abstract fun wordProgressDao(): WordProgressDao

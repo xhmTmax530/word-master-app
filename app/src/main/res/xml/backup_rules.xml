@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- B-2 fix: Android 6.0 ~ 11 (API 23 ~ 30) 的全量备份规则
+     通过 fullBackupContent 引用,只备份用户学习进度数据库。
+-->
+<full-backup-content>
+    <include domain="database" path="word_master_db" />
+</full-backup-content>

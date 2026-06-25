@@ -24,6 +24,13 @@ interface WordProgressDao {
     suspend fun upsertAll(entities: List<WordProgressEntity>)
 
     /**
+     * B-3 fix: 仅插入新词进度,已存在的记录不覆盖。
+     * 用 IGNORE 策略,避免 App 重启时把用户的复习进度(stage/correctCount/wrongCount)清零。
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun initializeAllWords(entities: List<WordProgressEntity>)
+
+    /**
      * Observe all progress records as a Flow.
      */
     @Query("SELECT * FROM word_progress")

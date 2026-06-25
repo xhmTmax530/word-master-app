@@ -27,3 +27,5 @@ Thumbs.db
 
 # Claude agent worktrees (per-session, never committed)
 .claude/worktrees/
+# 本地 tmux 启动脚本,不属于项目代码
+start_dev.sh

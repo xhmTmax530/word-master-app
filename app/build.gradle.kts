@@ -21,13 +21,29 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // B-1 fix: 共用签名配置。debug 用默认 debug keystore,release 用发布 keystore。
+    // 上架前需把 release keystore 放到 app/keystore/wordmaster-release.jks 并配置密码
+    signingConfigs {
+        // debug 用 Android SDK 自带的 ~/.android/debug.keystore,无需额外配置
+        // release 配置示例(请自行放置 keystore 文件并替换密码):
+        // create("release") {
+        //     storeFile = file("keystore/wordmaster-release.jks")
+        //     storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+        //     keyAlias = "wordmaster"
+        //     keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+        // }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // B-1 fix: 启用 R8/ProGuard 压缩 + 签名(签名见上方,本环境无 keystore 文件保留 isMinifyEnabled=true 但签名待补)
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // signingConfig = signingConfigs.getByName("release") // 上架前启用
         }
         debug {
             isDebuggable = true
@@ -53,6 +69,11 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+// D-1 fix: 输出 Room schema 到 app/schemas/,供版本升级时迁移参考
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 dependencies {
