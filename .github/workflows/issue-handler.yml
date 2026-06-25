@@ -141,13 +141,22 @@ jobs:
           }
           JSON
           )
-          RESPONSE=$(curl -sS \
+          RESPONSE=$(curl -sS --max-time 30 --retry 3 --retry-delay 5 \
+            -w "\nHTTP_STATUS=%{http_code}" \
             -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" \
             -H "Content-Type: application/json" \
             -d "$PROMPT" \
-            https://api.deepseek.com/v1/chat/completions)
-          VERDICT_TEXT=$(echo "$RESPONSE" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])")
+            https://api.deepseek.com/v1/chat/completions || echo "\nHTTP_STATUS=CURL_FAILED")
+          # 分离 HTTP 状态和 body
+          HTTP_STATUS=$(echo "$RESPONSE" | grep -oE 'HTTP_STATUS=[A-Z_0-9]+' | tail -1 | cut -d= -f2)
+          BODY=$(echo "$RESPONSE" | sed 's/HTTP_STATUS=.*//')
+          echo "DeepSeek HTTP status: $HTTP_STATUS"
+          echo "DeepSeek response body (first 500 chars): ${BODY:0:500}"
+          VERDICT_TEXT=$(echo "$BODY" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['choices'][0]['message']['content'])" 2>&1) || {
+            echo "❌ DeepSeek verdict failed"
+            VERDICT_TEXT="{\"verdict\":\"FAIL\",\"summary\":\"DeepSeek API 不可用(HTTP $HTTP_STATUS),Agent 跳过审查\",\"details\":[\"- DeepSeek 返回空响应或非 JSON\",\"- 请稍后重试或在 Settings 检查 DEEPSEEK_API_KEY Secret\"]}"
+          }
           {
             echo "text<<EOF"
             echo "$VERDICT_TEXT"
@@ -228,11 +237,14 @@ jobs:
           msg['Subject'] = subject
           msg.set_content(body)
           ctx = ssl.create_default_context()
-          with smtplib.SMTP_SSL(host, port, context=ctx) as s:
-              s.login(user, password)
-              s.send_message(msg)
-          print('Email sent to ' + to)
-          PYEOF
+          try:
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+                  s.login(user, password)
+                  s.send_message(msg)
+              print('✅ Email sent to ' + to)
+          except Exception as e:
+              print(f'❌ Email failed: {type(e).__name__}: {e}')
+              raise
 
   # ========================================================================
   # Job 2: 每日 9:30 汇总昨天的 PR + issue,发一封日报邮件
@@ -342,8 +354,11 @@ jobs:
           msg['Subject'] = subject
           msg.set_content(body)
           ctx = ssl.create_default_context()
-          with smtplib.SMTP_SSL(host, port, context=ctx) as s:
-              s.login(user, password)
-              s.send_message(msg)
-          print('Daily digest sent to ' + to)
-          PYEOF
+          try:
+              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+                  s.login(user, password)
+                  s.send_message(msg)
+              print('✅ Daily digest sent to ' + to)
+          except Exception as e:
+              print(f'❌ Daily digest failed: {type(e).__name__}: {e}')
+              raise
