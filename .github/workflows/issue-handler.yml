@@ -237,7 +237,9 @@ jobs:
           msg.set_content(body)
           ctx = ssl.create_default_context()
           try:
-              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+              # Gmail 用 587 + STARTTLS(SMTP_SSL 是 465 隐式 SSL,Gmail 不支持)
+              with smtplib.SMTP(host, port, timeout=30) as s:
+                  s.starttls(context=ctx)
                   s.login(user, password)
                   s.send_message(msg)
               print('✅ Email sent to ' + to)
@@ -354,7 +356,9 @@ jobs:
           msg.set_content(body)
           ctx = ssl.create_default_context()
           try:
-              with smtplib.SMTP_SSL(host, port, context=ctx, timeout=30) as s:
+              # Gmail 用 587 + STARTTLS(SMTP_SSL 是 465 隐式 SSL,Gmail 不支持)
+              with smtplib.SMTP(host, port, timeout=30) as s:
+                  s.starttls(context=ctx)
                   s.login(user, password)
                   s.send_message(msg)
               print('✅ Daily digest sent to ' + to)
