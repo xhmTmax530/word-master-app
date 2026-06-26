@@ -18,3 +18,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## 状态
 v1.0.0 MVP — 500 词精简版 + 艾宾浩斯复习
+
+## 路线图
+- [ ] 字体缩放设置
+- [ ] 单词收藏夹
+- [ ] 学习统计图表
